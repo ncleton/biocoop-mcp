@@ -45,6 +45,24 @@ function searchExpression(base: string, query: string): string {
     const response = await fetch(BASE + "/catalogsearch/result/?q=" + encodeURIComponent(${JSON.stringify(query)}), { credentials: "include" });
     if (!response.ok) throw new Error("Recherche HTTP " + response.status);
     const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+    // Le site renvoie certaines requêtes (« lait avoine ») directement vers une
+    // fiche produit : elle est alors le seul résultat de la recherche.
+    if (response.redirected && new URL(response.url).pathname.indexOf("/catalogsearch/") < 0) {
+      const productForm = doc.querySelector("form[action*='checkout/cart/add']");
+      const metaOf = (selector) => { const node = doc.querySelector(selector); return node ? (node.getAttribute("content") || clean(node.textContent)) : null; };
+      const productAmount = doc.querySelector("[data-price-amount]");
+      const productUnit = doc.querySelector(".price-per-unit, .unit-price, .price-unit, [class*='prix-kg'], [class*='price-by']");
+      const productSku = metaOf("[itemprop='sku']");
+      const productName = clean((doc.querySelector("h1") || {}).textContent) || metaOf("meta[property='og:title']");
+      if (!productSku || !productName) throw new Error("Recherche redirigée vers une page qui n’est pas une fiche produit");
+      const vrac = doc.querySelector("form[data-role^='updateqty-form']");
+      return [{
+        sku: productSku, name: productName, brand: metaOf("meta[property='product:brand']") || null, url: response.url,
+        price: productAmount ? productAmount.getAttribute("data-price-amount") : metaOf("meta[property='product:price:amount']"),
+        unit_price: productUnit ? clean(productUnit.textContent) : null, orderable: !!productForm,
+        bulk: !!vrac && vrac.getAttribute("data-vrac") === "1",
+      }];
+    }
     const items = Array.prototype.slice.call(doc.querySelectorAll("li.product-item"));
     if (!items.length) {
       if (!/aucun r[ée]sultat|aucun produit|ne correspond|0 r[ée]sultat/i.test(clean(doc.body && doc.body.textContent).slice(0, 8000))) throw new Error("Contrat liste produits absent");
